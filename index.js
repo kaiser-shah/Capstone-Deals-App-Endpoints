@@ -1,15 +1,100 @@
 // Importing the required libraries
-const express = require("express"); // Express framework for building the server
-let path = require("path"); // Path module for handling file paths
-const cors = require("cors"); // CORS module for handling cross-origin requests (important for frontend-backend communication))
-require("dotenv").config(); // Dotenv module for loading environment variables from a .env file
+import express from "express"; // Express framework for building the server
+import path from "path"; // Path module for handling file paths
+import cors from "cors"; // CORS module for handling cross-origin requests (important for frontend-backend communication))
+import dotenv from "dotenv";
+dotenv.config(); // Dotenv module for loading environment variables from a .env file
 
-// const bcrypt = require("bcrypt"); // Bcrypt module for hashing passwords
-// const jwt = require("jsonwebtoken"); // JWT module for handling JSON Web Tokens (important for authentication)
+// Firebase Admin SDK
+import admin from "firebase-admin";
 
 // Postgres client setup
-const { Pool } = require("pg"); // Importing the Pool class from the pg module
+import { Pool } from "pg"; // PostgreSQL client for connecting to the database
+import firebase from "firebase/compat/app"; // Firebase compatibility layer for using Firebase features
+import { userInfo } from "os"; // Importing userInfo from the OS module (not used in this code)
 const { DATABASE_URL, SECRET_KEY } = process.env; // Loading the database URL and secret key from the environment variables
+
+// Initialise the express app
+const serviceAccount = {
+  type: "service_account",
+  project_id: "capstone-deals-app",
+  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+  private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"), // Convert \n to actual line breaks
+  client_email: process.env.FIREBASE_CLIENT_EMAIL,
+  client_id: process.env.FIREBASE_CLIENT_ID,
+  auth_uri: process.env.FIREBASE_AUTH_URI,
+  token_uri: process.env.FIREBASE_TOKEN_URI,
+  auth_provider_x509_cert_url: process.env.FIREBASE_AUTH_PROVIDER_X509_CERT_URL,
+  client_x509_cert_url: process.env.FIREBASE_CLIENT_X509_CERT_URL,
+  universe_domain: "googleapis.com",
+};
+
+// Check if variables are loaded
+console.log("Private Key ID:", process.env.FIREBASE_PRIVATE_KEY_ID);
+console.log("Private Key exists:", !!process.env.FIREBASE_PRIVATE_KEY);
+console.log("Client Email:", process.env.FIREBASE_CLIENT_EMAIL);
+
+import { get } from "http";
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+// Inline Middleware Function
+const authenticateToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers["authorization"];
+    const token = authHeader && authHeader.split(" ")[1]; // Extract token from "Bearer TOKEN";
+
+    if (!token) {
+      return res.status(401).json({ error: "Access token required" });
+    }
+
+    // Verify Firebase token
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    console.log(decodedToken);
+    // Add user info to request object
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+      // Add other fields you need
+    };
+
+    // Continue to next middleware/route handler
+    next();
+  } catch (error) {
+    console.error("Token verification error:", error);
+    res.status(403).json({ error: "Invalid or expired token" });
+  }
+};
+
+// Middleware to check if the user is an admin
+const isAdmin = async (req, res, next) => {
+  try {
+    const user_id = req.user.uid; // This comes from authenticateToken middleware
+    const client = await pool.connect();
+
+    try {
+      const checkAdmin = await client.query(
+        "SELECT is_admin FROM users WHERE user_id = $1",
+        [user_id]
+      );
+
+      if (checkAdmin.rows.length === 0 || !checkAdmin.rows[0].is_admin) {
+        return res.status(403).json({ error: "Access denied. Admins only." });
+      }
+
+      // User is an admin, continue to next middleware/route handler
+      next();
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error("Admin check error:", error);
+    res
+      .status(500)
+      .json({ error: "Something went wrong during admin verification." });
+  }
+};
 
 // Initialise the express app
 let app = express();
@@ -37,10 +122,492 @@ async function getPostgreVersion() {
   }
 }
 
-// getPostgreVersion();
+getPostgreVersion();
 
-// upload a deal
-// picture, description, price, location, category, user_id.
+// 1. USER ENDPOINTS (Firebase Auth Integration)
+
+// -------------- Create user record in your database after Firebase auth --------------
+
+app.post("/addnewuser", async (req, res) => {
+  const { firebase_user_id, email_verified, email, created_at, username } =
+    req.body;
+  const client = await pool.connect();
+  try {
+    // Check if the user already exists
+    const userExists = await client.query(
+      "SELECT * FROM users WHERE user_id = $1",
+      [firebase_user_id]
+    );
+    if (userExists.rowCount === 0) {
+      // User does not exit, add them
+      const addUser = await client.query(
+        "INSERT INTO users (user_id, email, username, email_verified, created_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) RETURNING *",
+        [firebase_user_id, email, username, email_verified, created_at]
+      );
+      // Send new booking data back to client
+      res.json(addUser.rows[0]);
+    } else {
+      // User already exists
+      res.status(400).json({
+        error:
+          "This user already already exists. Cannot create a duplicate account.",
+      });
+    }
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// -------------- Get current user's profile -------------- CHECKED, WORKS!
+
+app.get("/user/profile", authenticateToken, async (req, res) => {
+  //This has now been properly protected with Firebase token authentication.
+
+  // at this point, the user will have to be logged in so no need for checking if user exists.
+
+  try {
+    const user_id = req.user.uid; // From Firebase token via middleware
+    const client = await pool.connect();
+    // Query using Firebase User ID, not internal database user ID
+    const result = await client.query(
+      "SELECT * FROM users WHERE user_id = $1",
+      [user_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json({ details: result.rows[0] });
+    client.release();
+  } catch (err) {
+    res
+      .status(400)
+      .json({ error: "Something went wrong, please try again later" });
+  }
+});
+
+// -------------- Update user profile -------------- CHECKED, WORKS!
+
+app.put("/user/edit", authenticateToken, async (req, res) => {
+  const { username, profile_pic, updated_at } = req.body;
+  // The user is now authenticated via the middleware
+  const client = await pool.connect();
+
+  try {
+    console.log(req, req.user);
+    const user_id = req.user.uid; // From Firebase token
+    const userDetails = await client.query(
+      "UPDATE users SET username = $1, profile_pic = $2, updated_at = CURRENT_TIMESTAMP WHERE user_id = $3 RETURNING *",
+      [username, profile_pic, user_id]
+    );
+    console.log(userDetails);
+    if (userDetails.rows.length === 0) {
+      // Perhaps the user does not exist (user ID not matching)
+      res.status(400).json({ error: "Could not find the User" });
+    } else {
+      // User updated successfully
+      res.json(userDetails.rows[0]);
+    }
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// 2. CATEGORIES ENDPOINTS
+
+// -------------- Get all active categories -------------- CHECKED, WORKS!
+
+app.get("/categories", async (req, res) => {
+  const { categories } = req.params;
+  const client = await pool.connect();
+  try {
+    const listCategories = await client.query(
+      "SELECT category_name FROM categories"
+    );
+
+    if (listCategories.rows.length === 0) {
+      // if there are no categories in the table:
+      res.status(400).json({
+        error: "Could not find any categories. Please add some and try again.",
+      });
+    } else {
+      // Return the list of categories.
+      res.json(listCategories.rows);
+    }
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "something went wrong, please try again later! " });
+  } finally {
+    client.release();
+  }
+});
+
+// -------------- Create new category -------------- CHECKED, WORKS!
+
+app.post("/categories", authenticateToken, isAdmin, async (req, res) => {
+  const { category_name } = req.body;
+  const client = await pool.connect();
+
+  try {
+    const newCategory = await client.query(
+      "INSERT INTO categories (category_name) VALUES ($1) RETURNING *",
+      [category_name]
+    );
+    res.json(newCategory.rows[0]); // Return the newly created category
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// -------------- Delete a category -------------- CHECKED, WORKS!
+
+app.delete("/categories", authenticateToken, isAdmin, async (req, res) => {
+  const { category_name } = req.body;
+  const client = await pool.connect();
+
+  try {
+    const deleteCategory = await client.query(
+      "DELETE FROM categories WHERE category_name = $1 RETURNING *",
+      [category_name]
+    );
+    res.json(
+      {
+        message: `The Category "${category_name}" has been successfully deleted`,
+      },
+      deleteCategory.rows
+    ); // Return the updated category list
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// 3. DEALS ENDPOINTS (Core functionality)
+
+// -------------- Get all the active deals -------------- CHECKED, WORKS!
+
+app.get("/deals", async (req, res) => {
+  const { deals } = req.params;
+  const client = await pool.connect();
+  try {
+    const listDeals = await client.query(
+      "SELECT * FROM deal WHERE is_active = true"
+    );
+
+    if (listDeals.rows.length === 0) {
+      // if there are no deals in the table:
+      res.status(400).json({
+        error: "Could not find any deals. Please add some and try again.",
+      });
+    } else {
+      // Return the list of deals.
+      res.json(listDeals.rows);
+    }
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// Get single deal with full details CHECKED, WORKS!
+
+app.get("/deals/:deal_id", async (req, res) => {
+  const { deal_id } = req.params;
+  const client = await pool.connect();
+  try {
+    const dealDetails = await client.query(
+      "SELECT * FROM deal WHERE deal_id = $1 AND is_active = true",
+      [deal_id]
+    );
+
+    if (dealDetails.rows.length === 0) {
+      // if there are no deals in the table:
+      res.status(400).json({
+        error: "Could not find any deals with that ID. Please try again.",
+      });
+    } else {
+      // Return the list of deals.
+      res.json(dealDetails.rows[0]);
+    }
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// -------------- Create a new deal -------------- CHECKED, WORKS!
+
+app.post("/deals", authenticateToken, async (req, res) => {
+  const user_id = req.user.uid; // Get the user ID from the authenticated user
+  const {
+    title,
+    description,
+    category_name, // Selected from a dropdown in the frontend
+    price,
+    original_price,
+    deal_url,
+    image_url,
+    created_at,
+  } = req.body;
+  const client = await pool.connect();
+
+  try {
+    // first , get the category ID from the category name
+    const categoryResult = await client.query(
+      "SELECT category_id FROM categories WHERE category_name = $1",
+      [category_name]
+    );
+
+    if (categoryResult.rows.length === 0) {
+      return res.status(400).json({
+        error: "Category does not exist. Please select a valid category.",
+      });
+    }
+
+    const category_id = categoryResult.rows[0].category_id; // Get the category ID from the result
+
+    // Check if the deal already exists
+    const existingDeal = await client.query(
+      "SELECT * FROM deal WHERE deal_url = $1",
+      [deal_url]
+    );
+    if (existingDeal.rows.length > 0) {
+      return res.status(400).json({
+        error: "This deal already exists. Cannot create a duplicate deal.",
+      });
+    } else {
+      // Deal does not exist, proceed to create a new deal
+      const newDeal = await client.query(
+        "INSERT INTO deal (title, description, category_id, price, original_price, deal_url, image_url, created_at, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, $8) RETURNING *",
+        [
+          title,
+          description,
+          category_id, // This should be the ID of the category, not the name
+          price,
+          original_price,
+          deal_url,
+          image_url,
+          user_id,
+        ]
+      );
+      res.json(newDeal.rows[0]); // Return the newly created deal
+    }
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// -------------- Update a deal -------------- CHECKED, WORKS!
+
+app.put("/deals/:deal_id", authenticateToken, async (req, res) => {
+  const { deal_id } = req.params; // Get the deal ID from the URL parameters
+  const user_id = req.user.uid; // Get the user ID from the authenticated user
+  const client = await pool.connect();
+
+  const check_user = await pool.query(
+    "SELECT user_id FROM deal WHERE deal_id = $1",
+    [deal_id]
+  );
+  try {
+    if (check_user.rows.length === 0) {
+      return res.status(404).json({ error: "Deal not found" });
+    }
+    if (check_user.rows[0].user_id !== user_id && !isAdmin) {
+      return res
+        .status(403)
+        .json({ error: "You are not authorized to edit this deal" });
+    } else {
+      const {
+        title,
+        description,
+        category_name, // Selected from a dropdown in the frontend
+        price,
+        original_price,
+        deal_url,
+        image_url,
+        updated_at,
+      } = req.body;
+      const client = await pool.connect();
+
+      // first , get the category ID from the category name
+      const categoryResult = await client.query(
+        "SELECT category_id FROM categories WHERE category_name = $1",
+        [category_name]
+      );
+
+      if (categoryResult.rows.length === 0) {
+        return res.status(400).json({
+          error: "Category does not exist. Please select a valid category.",
+        });
+      }
+
+      const category_id = categoryResult.rows[0].category_id; // Get the category ID from the result
+
+      // Update the deal
+      const updatedDeal = await client.query(
+        "UPDATE deal SET title = $1, description = $2, category_id = $3, price = $4, original_price = $5, deal_url = $6, image_url = $7, updated_at = CURRENT_TIMESTAMP WHERE deal_id = $8 RETURNING *",
+        [
+          title,
+          description,
+          category_id, // This should be the ID of the category, not the name
+          price,
+          original_price,
+          deal_url,
+          image_url,
+          deal_id,
+        ]
+      );
+      console.log(updatedDeal);
+
+      if (updatedDeal.rows.length === 0) {
+        return res.status(404).json({ error: "Deal not found or not updated" });
+      } else {
+        // Deal updated successfully
+
+        res.json(updatedDeal.rows[0]); // Return the updated deal
+      }
+    }
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// -------------- Soft delete deal (set is_active = false) -------------- CHECKED, WORKS!
+
+app.delete("/deals/:deal_id", authenticateToken, async (req, res) => {
+  const { deal_id } = req.params; // Get the deal ID from the URL parameters
+  const user_id = req.user.uid; // Get the user ID from the authenticated user
+  const client = await pool.connect();
+
+  try {
+    // Check if the user id matches the deal's user_id or if the user is an admin
+    const check_user = await client.query(
+      "SELECT * FROM deal WHERE deal_id = $1",
+      [deal_id]
+    );
+    if (check_user.rows.length === 0) {
+      return res.status(404).json({ error: "Deal not found" });
+    }
+
+    if (check_user.rows[0].user_id !== user_id && !isAdmin) {
+      // Check if the user is not the owner of the deal and not an admin
+      return res
+        .status(403)
+        .json({ error: "You are not authorized to remove this deal" });
+    }
+    if (!check_user.rows[0].is_active) {
+      return res.status(400).json({ error: "Deal is already inactive" });
+    } else {
+      // Soft delete the deal by setting is_active to false
+      const softDeleteDeal = await client.query(
+        "UPDATE deal SET is_active = false, updated_at = CURRENT_TIMESTAMP WHERE deal_id = $1 RETURNING *",
+        [deal_id]
+      );
+
+      if (softDeleteDeal.rows.length === 0) {
+        return res.status(404).json({ error: "Deal not found or removed" });
+      } else {
+        // Deal soft deleted successfully
+        res.json({
+          message: `The deal with ID ${deal_id} has been successfully removed`,
+          deal: softDeleteDeal.rows[0],
+        });
+      }
+    }
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// -------------- Get deals by specific user -------------- CHECKED, WORKS!
+
+app.get("/deals/user/:user_id", authenticateToken, async (req, res) => {
+  const { user_id } = req.params; // Get the user ID from the URL parameters
+  const client = await pool.connect();
+
+  try {
+    // Check if the user exists
+    const userExists = await client.query(
+      "SELECT * FROM users WHERE user_id = $1",
+      [user_id]
+    );
+
+    if (userExists.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Get deals created by the specific user
+    const userDeals = await client.query(
+      "SELECT * FROM deal WHERE user_id = $1 AND is_active = true",
+      [user_id]
+    );
+
+    if (userDeals.rows.length === 0) {
+      return res.status(404).json({ error: "No deals found for this user" });
+    }
+
+    res.json(userDeals.rows); // Return the user's deals
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// 4. VOTING ENDPOINTS
+
+// 5. DEAL IMAGES ENDPOINTS
+
+// 6. SEARCH & FILTERING ENDPOINTS
+
+// 7. ADMIN ENDPOINTS (For managing users, deals, and categories)
 
 // ------------ WELCOME MESSAGE WHEN THE API RUNS --------------
 app.get("/", (req, res) => {
