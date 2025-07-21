@@ -308,10 +308,9 @@ app.delete("/categories", authenticateToken, isAdmin, async (req, res) => {
 // -------------- Get all the active deals -------------- CHECKED, WORKS!
 
 app.get("/deals", async (req, res) => {
-  const { deals } = req.params;
   const client = await pool.connect();
   try {
-    const listDeals = await client.query(
+    let listDeals = await client.query(
       "SELECT * FROM deal WHERE is_active = true"
     );
 
@@ -321,8 +320,35 @@ app.get("/deals", async (req, res) => {
         error: "Could not find any deals. Please add some and try again.",
       });
     } else {
-      // Return the list of deals.
-      res.json(listDeals.rows);
+      // Use Promise.all with map to handle async operations
+      const dealsWithVotes = await Promise.all(
+        listDeals.rows.map(async (deal) => {
+          // Separate queries - await each one
+          const upvoteResult = await client.query(
+            "SELECT COUNT(*) FROM votes WHERE deal_id = $1 AND vote_type = 'up'",
+            [deal.deal_id]
+          );
+
+          const downvoteResult = await client.query(
+            "SELECT COUNT(*) FROM votes WHERE deal_id = $1 AND vote_type = 'down'",
+            [deal.deal_id]
+          );
+
+          const upvoteCount = parseInt(upvoteResult.rows[0].count);
+          const downvoteCount = parseInt(downvoteResult.rows[0].count);
+          const netVotes = upvoteCount - downvoteCount;
+
+          // Return the deal with vote counts
+          return {
+            ...deal, // Include all deal properties
+            up_votes: upvoteCount,
+            down_votes: downvoteCount,
+            net_votes: netVotes,
+          };
+        })
+      );
+
+      res.json(dealsWithVotes); // Return the list of deals with vote counts
     }
   } catch (err) {
     console.log(err.stack);
@@ -603,6 +629,138 @@ app.get("/deals/user/:user_id", authenticateToken, async (req, res) => {
 
 // 4. VOTING ENDPOINTS
 
+// -------------- Vote a deal (up/down)-------------- CHECKED, WORKS!
+
+app.post("/deals/vote", authenticateToken, async (req, res) => {
+  const { deal_id, vote_type } = req.body; // Expecting 'up' or 'down' for vote_type
+  const user_id = req.user.uid; // Get the user ID from the authenticated user
+  // Convert deal_id to integer (in case it comes in as a string like "1")
+  const deal_id_int = parseInt(deal_id, 10);
+
+  const client = await pool.connect();
+
+  try {
+    // Check if the deal exists
+    const dealExists = await client.query(
+      "SELECT * FROM deal WHERE deal_id = $1 AND is_active = true",
+      [deal_id_int]
+    );
+
+    if (dealExists.rows.length === 0) {
+      return res.status(404).json({ error: "Deal not found or inactive" });
+    }
+
+    // Check if the user has already voted on this deal.
+    const existingVote = await client.query(
+      "SELECT * FROM votes WHERE user_id = $1 AND deal_id = $2",
+      [user_id, deal_id_int]
+    );
+
+    if (existingVote.rows.length > 0) {
+      // User has already voted, update the vote type
+      const updatedVote = await client.query(
+        "UPDATE votes SET vote_type = $1 WHERE user_id = $2 AND deal_id = $3 RETURNING *",
+        [vote_type, user_id, deal_id_int]
+      );
+      res.json(updatedVote.rows[0]); // Return the updated vote
+    } else {
+      // User has not voted yet, insert a new vote
+      const newVote = await client.query(
+        "INSERT INTO votes (user_id, deal_id, vote_type) VALUES ($1, $2, $3) RETURNING *",
+        [user_id, deal_id_int, vote_type]
+      );
+      res.json(newVote.rows[0]); // Return the new vote
+    }
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// -------------- Remove vote --------------
+
+app.put("/deals/vote", authenticateToken, async (req, res) => {
+  const { deal_id, vote_type } = req.body; // vote_type should be 'up' or 'down'
+  const user_id = String(req.user.uid);
+  const deal_id_int = parseInt(deal_id, 10); // Convert to integer
+
+  console.log(
+    "Toggle vote - deal_id:",
+    deal_id_int,
+    "vote_type:",
+    vote_type,
+    "user_id:",
+    user_id
+  );
+
+  const client = await pool.connect();
+
+  try {
+    // First check if the deal exists
+    const dealExists = await client.query(
+      "SELECT * FROM deal WHERE deal_id = $1 AND is_active = true",
+      [deal_id_int]
+    );
+
+    if (dealExists.rows.length === 0) {
+      return res.status(404).json({ error: "Deal not found or inactive" });
+    }
+
+    // Check if user has already voted on this deal
+    const existingVote = await client.query(
+      "SELECT * FROM votes WHERE user_id = $1 AND deal_id = $2",
+      [user_id, deal_id_int]
+    );
+
+    if (existingVote.rows.length > 0) {
+      const currentVoteType = existingVote.rows[0].vote_type;
+
+      if (currentVoteType === vote_type) {
+        // Same vote type - REMOVE the vote (toggle off)
+        await client.query(
+          "DELETE FROM votes WHERE user_id = $1 AND deal_id = $2",
+          [user_id, deal_id_int]
+        );
+        return res.json({
+          message: "Vote removed",
+          action: "removed",
+          vote_type: vote_type,
+        });
+      } else {
+        // Different vote type - UPDATE to new vote type
+        const updatedVote = await client.query(
+          "UPDATE votes SET vote_type = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2 AND deal_id = $3 RETURNING *",
+          [vote_type, user_id, deal_id_int]
+        );
+        return res.json({
+          message: "Vote updated",
+          action: "updated",
+          vote: updatedVote.rows[0],
+        });
+      }
+    } else {
+      // No existing vote - CREATE new vote
+      const newVote = await client.query(
+        "INSERT INTO votes (user_id, deal_id, vote_type) VALUES ($1, $2, $3) RETURNING *",
+        [user_id, deal_id_int, vote_type]
+      );
+      return res.json({
+        message: "Vote added",
+        action: "added",
+        vote: newVote.rows[0],
+      });
+    }
+  } catch (err) {
+    console.error("Vote toggle error:", err);
+    res.status(500).json({ error: "Something went wrong" });
+  } finally {
+    client.release();
+  }
+});
 // 5. DEAL IMAGES ENDPOINTS
 
 // 6. SEARCH & FILTERING ENDPOINTS
