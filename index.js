@@ -2,8 +2,63 @@
 import express from "express"; // Express framework for building the server
 import path from "path"; // Path module for handling file paths
 import cors from "cors"; // CORS module for handling cross-origin requests (important for frontend-backend communication))
-import dotenv from "dotenv";
+import { v2 as cloudinary } from "cloudinary"; // Cloudinary for image upload and management
+import multer from "multer"; // Multer for handling multipart/form-data, used for file uploads
+import dotenv from "dotenv"; // Dotenv for loading environment variables from a .env file
 dotenv.config(); // Dotenv module for loading environment variables from a .env file
+
+// Cloudinary configuration
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// Configure Multer for handling file uploads (memory storage)
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Only allow image files
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed!"), false);
+    }
+  },
+});
+
+// Helper function to upload image to Cloudinary
+const uploadToCloudinary = (fileBuffer, folder = "deals") => {
+  // Default folder is 'deals'
+  return new Promise((resolve, reject) => {
+    // Using a Promise to handle asynchronous upload
+    cloudinary.uploader
+      .upload_stream(
+        // Uploading the image to Cloudinary
+        {
+          resource_type: "image",
+          folder: folder,
+          transformation: [
+            { width: 800, height: 600, crop: "limit" },
+            { quality: "auto" },
+            { format: "auto" },
+          ],
+        },
+        (error, result) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(result);
+          }
+        }
+      )
+      .end(fileBuffer);
+  });
+};
 
 // Firebase Admin SDK
 import admin from "firebase-admin";
@@ -311,7 +366,11 @@ app.get("/deals", async (req, res) => {
   const client = await pool.connect();
   try {
     let listDeals = await client.query(
-      "SELECT * FROM deal WHERE is_active = true"
+      `SELECT d.*, 
+              di.image_url as primary_image_url
+       FROM deal d
+       LEFT JOIN deal_images di ON d.deal_id = di.deal_id AND di.is_primary_pic = true
+       WHERE d.is_active = true`
     );
 
     if (listDeals.rows.length === 0) {
@@ -629,13 +688,13 @@ app.get("/deals/user/:user_id", authenticateToken, async (req, res) => {
 
 // 4. VOTING ENDPOINTS
 
-// -------------- Vote a deal (up/down)-------------- CHECKED, WORKS!
+// -------------- Vote a deal (up/down)-------------- CHECKED, WORKS! - Duplicaate to the remove vote endpoint
 
 app.post("/deals/vote", authenticateToken, async (req, res) => {
   const { deal_id, vote_type } = req.body; // Expecting 'up' or 'down' for vote_type
   const user_id = req.user.uid; // Get the user ID from the authenticated user
   // Convert deal_id to integer (in case it comes in as a string like "1")
-  const deal_id_int = parseInt(deal_id, 10);
+  // const deal_id_int = parseInt(deal_id, 10);
 
   const client = await pool.connect();
 
@@ -681,16 +740,16 @@ app.post("/deals/vote", authenticateToken, async (req, res) => {
   }
 });
 
-// -------------- Remove vote --------------
+// -------------- Add or Remove vote -------------- CHECKED, WORKS!
 
-app.put("/deals/vote", authenticateToken, async (req, res) => {
+app.put("/deals/addorremove/vote", authenticateToken, async (req, res) => {
   const { deal_id, vote_type } = req.body; // vote_type should be 'up' or 'down'
   const user_id = String(req.user.uid);
-  const deal_id_int = parseInt(deal_id, 10); // Convert to integer
+  // const deal_id = parseInt(deal_id, 10); // Convert to integer
 
   console.log(
     "Toggle vote - deal_id:",
-    deal_id_int,
+    deal_id,
     "vote_type:",
     vote_type,
     "user_id:",
@@ -703,7 +762,7 @@ app.put("/deals/vote", authenticateToken, async (req, res) => {
     // First check if the deal exists
     const dealExists = await client.query(
       "SELECT * FROM deal WHERE deal_id = $1 AND is_active = true",
-      [deal_id_int]
+      [deal_id]
     );
 
     if (dealExists.rows.length === 0) {
@@ -713,7 +772,7 @@ app.put("/deals/vote", authenticateToken, async (req, res) => {
     // Check if user has already voted on this deal
     const existingVote = await client.query(
       "SELECT * FROM votes WHERE user_id = $1 AND deal_id = $2",
-      [user_id, deal_id_int]
+      [user_id, deal_id]
     );
 
     if (existingVote.rows.length > 0) {
@@ -723,7 +782,7 @@ app.put("/deals/vote", authenticateToken, async (req, res) => {
         // Same vote type - REMOVE the vote (toggle off)
         await client.query(
           "DELETE FROM votes WHERE user_id = $1 AND deal_id = $2",
-          [user_id, deal_id_int]
+          [user_id, deal_id]
         );
         return res.json({
           message: "Vote removed",
@@ -734,7 +793,7 @@ app.put("/deals/vote", authenticateToken, async (req, res) => {
         // Different vote type - UPDATE to new vote type
         const updatedVote = await client.query(
           "UPDATE votes SET vote_type = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2 AND deal_id = $3 RETURNING *",
-          [vote_type, user_id, deal_id_int]
+          [vote_type, user_id, deal_id]
         );
         return res.json({
           message: "Vote updated",
@@ -746,7 +805,7 @@ app.put("/deals/vote", authenticateToken, async (req, res) => {
       // No existing vote - CREATE new vote
       const newVote = await client.query(
         "INSERT INTO votes (user_id, deal_id, vote_type) VALUES ($1, $2, $3) RETURNING *",
-        [user_id, deal_id_int, vote_type]
+        [user_id, deal_id, vote_type]
       );
       return res.json({
         message: "Vote added",
@@ -762,6 +821,292 @@ app.put("/deals/vote", authenticateToken, async (req, res) => {
   }
 });
 // 5. DEAL IMAGES ENDPOINTS
+
+// -------------- Upload single image for a deal --------------
+app.post(
+  "/deals/:deal_id/images",
+  authenticateToken,
+  upload.single("image"),
+  async (req, res) => {
+    const { deal_id } = req.params;
+    const user_id = req.user.uid;
+    const { is_primary_pic = false } = req.body;
+
+    if (!req.file) {
+      return res.status(400).json({ error: "No image file provided" });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      // Check if the deal exists and belongs to the user
+      const dealCheck = await client.query(
+        "SELECT * FROM deal WHERE deal_id = $1 AND user_id = $2 AND is_active = true",
+        [deal_id, user_id]
+      );
+
+      if (dealCheck.rows.length === 0) {
+        return res.status(404).json({
+          error: "Deal not found or you do not have permission to add images",
+        });
+      }
+
+      // Upload image to Cloudinary
+      const uploadResult = await uploadToCloudinary(req.file.buffer, "deals");
+
+      // Get the next display order
+      const orderResult = await client.query(
+        "SELECT COALESCE(MAX(display_order), 0) + 1 as next_order FROM deal_images WHERE deal_id = $1",
+        [deal_id]
+      );
+      const displayOrder = orderResult.rows[0].next_order;
+
+      // If this is set as primary, update other images to not be primary
+      if (is_primary_pic === true || is_primary_pic === "true") {
+        await client.query(
+          "UPDATE deal_images SET is_primary_pic = false WHERE deal_id = $1",
+          [deal_id]
+        );
+      }
+
+      // Save image info to database
+      const newImage = await client.query(
+        "INSERT INTO deal_images (deal_id, image_url, is_primary_pic, display_order) VALUES ($1, $2, $3, $4) RETURNING *",
+        [deal_id, uploadResult.secure_url, is_primary_pic, displayOrder]
+      );
+
+      res.json({
+        message: "Image uploaded successfully",
+        image: newImage.rows[0],
+        cloudinary_data: {
+          public_id: uploadResult.public_id,
+          secure_url: uploadResult.secure_url,
+        },
+      });
+    } catch (error) {
+      console.error("Image upload error:", error);
+      res.status(500).json({ error: "Failed to upload image" });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+// -------------- Upload multiple images for a deal --------------
+app.post(
+  "/deals/:deal_id/images/multiple",
+  authenticateToken,
+  upload.array("images", 5), // Limit to 5 images
+  async (req, res) => {
+    const { deal_id } = req.params;
+    const user_id = req.user.uid;
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: "No image files provided" });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      // Check if the deal exists and belongs to the user
+      const dealCheck = await client.query(
+        "SELECT * FROM deal WHERE deal_id = $1 AND user_id = $2 AND is_active = true",
+        [deal_id, user_id]
+      );
+
+      if (dealCheck.rows.length === 0) {
+        return res.status(404).json({
+          error: "Deal not found or you do not have permission to add images",
+        });
+      }
+
+      // Get the next display order
+      const orderResult = await client.query(
+        "SELECT COALESCE(MAX(display_order), 0) as max_order FROM deal_images WHERE deal_id = $1",
+        [deal_id]
+      );
+      let nextOrder = orderResult.rows[0].max_order + 1;
+
+      const uploadedImages = [];
+
+      // Upload each image to Cloudinary and save to database
+      for (const file of req.files) {
+        try {
+          const uploadResult = await uploadToCloudinary(file.buffer, "deals");
+
+          const newImage = await client.query(
+            "INSERT INTO deal_images (deal_id, image_url, is_primary_pic, display_order) VALUES ($1, $2, $3, $4) RETURNING *",
+            [deal_id, uploadResult.secure_url, false, nextOrder]
+          );
+
+          uploadedImages.push({
+            image: newImage.rows[0],
+            cloudinary_public_id: uploadResult.public_id,
+          });
+
+          nextOrder++;
+        } catch (uploadError) {
+          console.error("Error uploading individual image:", uploadError);
+          // Continue with other images even if one fails
+        }
+      }
+
+      res.json({
+        message: `Successfully uploaded ${uploadedImages.length} images`,
+        images: uploadedImages,
+      });
+    } catch (error) {
+      console.error("Multiple image upload error:", error);
+      res.status(500).json({ error: "Failed to upload images" });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+// -------------- Get all images for a deal --------------
+app.get("/deals/:deal_id/images", async (req, res) => {
+  const { deal_id } = req.params;
+  const client = await pool.connect();
+
+  try {
+    const images = await client.query(
+      "SELECT * FROM deal_images WHERE deal_id = $1 ORDER BY display_order ASC",
+      [deal_id]
+    );
+
+    if (images.rows.length === 0) {
+      return res.status(404).json({ error: "No images found for this deal" });
+    }
+
+    res.json(images.rows);
+  } catch (error) {
+    console.error("Get images error:", error);
+    res.status(500).json({ error: "Failed to retrieve images" });
+  } finally {
+    client.release();
+  }
+});
+
+// -------------- Delete an image --------------
+app.delete(
+  "/deals/:deal_id/images/:image_id",
+  authenticateToken,
+  async (req, res) => {
+    const { deal_id, image_id } = req.params;
+    const user_id = req.user.uid;
+
+    const client = await pool.connect();
+
+    try {
+      // Check if the deal belongs to the user
+      const dealCheck = await client.query(
+        "SELECT * FROM deal WHERE deal_id = $1 AND user_id = $2",
+        [deal_id, user_id]
+      );
+
+      if (dealCheck.rows.length === 0) {
+        return res
+          .status(404)
+          .json({ error: "Deal not found or you do not have permission" });
+      }
+
+      // Get image info before deleting
+      const imageResult = await client.query(
+        "SELECT * FROM deal_images WHERE image_id = $1 AND deal_id = $2",
+        [image_id, deal_id]
+      );
+
+      if (imageResult.rows.length === 0) {
+        return res.status(404).json({ error: "Image not found" });
+      }
+
+      const image = imageResult.rows[0];
+
+      // Extract public_id from Cloudinary URL to delete from Cloudinary
+      const urlParts = image.image_url.split("/");
+      const publicIdWithExtension = urlParts[urlParts.length - 1];
+      const publicId = publicIdWithExtension.split(".")[0];
+      const folderPublicId = `deals/${publicId}`;
+
+      try {
+        // Delete from Cloudinary
+        await cloudinary.uploader.destroy(folderPublicId);
+      } catch (cloudinaryError) {
+        console.error("Cloudinary deletion error:", cloudinaryError);
+        // Continue with database deletion even if Cloudinary deletion fails
+      }
+
+      // Delete from database
+      const deletedImage = await client.query(
+        "DELETE FROM deal_images WHERE image_id = $1 AND deal_id = $2 RETURNING *",
+        [image_id, deal_id]
+      );
+
+      res.json({
+        message: "Image deleted successfully",
+        deleted_image: deletedImage.rows[0],
+      });
+    } catch (error) {
+      console.error("Delete image error:", error);
+      res.status(500).json({ error: "Failed to delete image" });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+// -------------- Set primary image -------------- CHECKED, WORKS!
+app.put(
+  "/deals/:deal_id/images/:image_id/primary",
+  authenticateToken,
+  async (req, res) => {
+    const { deal_id, image_id } = req.params;
+    const user_id = req.user.uid;
+
+    const client = await pool.connect();
+
+    try {
+      // Check if the deal belongs to the user
+      const dealCheck = await client.query(
+        "SELECT * FROM deal WHERE deal_id = $1 AND user_id = $2",
+        [deal_id, user_id]
+      );
+
+      if (dealCheck.rows.length === 0) {
+        return res
+          .status(404)
+          .json({ error: "Deal not found or you do not have permission" });
+      }
+
+      // First, set all images for this deal to not primary
+      await client.query(
+        "UPDATE deal_images SET is_primary_pic = false WHERE deal_id = $1",
+        [deal_id]
+      );
+
+      // Then set the selected image as primary
+      const updatedImage = await client.query(
+        "UPDATE deal_images SET is_primary_pic = true WHERE image_id = $1 AND deal_id = $2 RETURNING *",
+        [image_id, deal_id]
+      );
+
+      if (updatedImage.rows.length === 0) {
+        return res.status(404).json({ error: "Image not found" });
+      }
+
+      res.json({
+        message: "Primary image updated successfully",
+        image: updatedImage.rows[0],
+      });
+    } catch (error) {
+      console.error("Set primary image error:", error);
+      res.status(500).json({ error: "Failed to set primary image" });
+    } finally {
+      client.release();
+    }
+  }
+);
 
 // 6. SEARCH & FILTERING ENDPOINTS
 
