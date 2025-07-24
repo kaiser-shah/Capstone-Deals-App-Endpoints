@@ -94,6 +94,32 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
+// Try-authenticate middleware: attaches req.user if token is present and valid, else req.user = null
+const tryAuthenticateToken = async (req, res, next) => {
+  const authHeader = req.headers["authorization"];
+  if (!authHeader) {
+    req.user = null;
+    return next();
+  }
+  const token = authHeader.split(" ")[1];
+  if (!token) {
+    req.user = null;
+    return next();
+  }
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+      // add other fields if needed
+    };
+  } catch (error) {
+    // Invalid or expired token, treat as unauthenticated
+    req.user = null;
+  }
+  next();
+};
+
 // Inline Middleware Function
 const authenticateToken = async (req, res, next) => {
   try {
@@ -196,7 +222,7 @@ app.post("/addnewuser", async (req, res) => {
     if (userExists.rowCount === 0) {
       // User does not exit, add them
       const addUser = await client.query(
-        "INSERT INTO users (user_id, email, username, email_verified, created_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) RETURNING *",
+        "INSERT INTO users (user_id, email, username, email_verified, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING *",
         [firebase_user_id, email, username, email_verified, created_at]
       );
       // Send new booking data back to client
@@ -213,6 +239,35 @@ app.post("/addnewuser", async (req, res) => {
     res
       .status(500)
       .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// Check if a user exists by email or username (public endpoint)
+
+app.get("/user/exists", async (req, res) => {
+  const { email, username } = req.query;
+  const client = await pool.connect();
+  try {
+    if (email) {
+      const result = await client.query(
+        "SELECT 1 FROM users WHERE email = $1 LIMIT 1",
+        [email]
+      );
+      return res.json({ exists: result.rows.length > 0 });
+    }
+    if (username) {
+      const result = await client.query(
+        "SELECT 1 FROM users WHERE username = $1 LIMIT 1",
+        [username]
+      );
+      return res.json({ exists: result.rows.length > 0 });
+    }
+    res.status(400).json({ error: "Email or username required" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Database error" });
   } finally {
     client.release();
   }
@@ -362,52 +417,65 @@ app.delete("/categories", authenticateToken, isAdmin, async (req, res) => {
 
 // -------------- Get all the active deals -------------- CHECKED, WORKS!
 
-app.get("/deals", async (req, res) => {
+app.get("/deals", tryAuthenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
+    const user_id = req.user ? req.user.uid : null; // Get the user ID from the authenticated user, or null if not authenticated
+
     let listDeals = await client.query(
       `SELECT d.*, 
-              di.image_url as primary_image_url
+         di.image_url as primary_image_url,
+         u.username,
+         u.profile_pic
        FROM deal d
        LEFT JOIN deal_images di ON d.deal_id = di.deal_id AND di.is_primary_pic = true
+       LEFT JOIN users u ON d.user_id = u.user_id
        WHERE d.is_active = true`
     );
 
     if (listDeals.rows.length === 0) {
-      // if there are no deals in the table:
-      res.status(400).json({
+      return res.status(400).json({
         error: "Could not find any deals. Please add some and try again.",
       });
     } else {
-      // Use Promise.all with map to handle async operations
       const dealsWithVotes = await Promise.all(
         listDeals.rows.map(async (deal) => {
-          // Separate queries - await each one
+          // Get upvotes, downvotes, net votes
           const upvoteResult = await client.query(
             "SELECT COUNT(*) FROM votes WHERE deal_id = $1 AND vote_type = 'up'",
             [deal.deal_id]
           );
-
           const downvoteResult = await client.query(
             "SELECT COUNT(*) FROM votes WHERE deal_id = $1 AND vote_type = 'down'",
             [deal.deal_id]
           );
-
           const upvoteCount = parseInt(upvoteResult.rows[0].count);
           const downvoteCount = parseInt(downvoteResult.rows[0].count);
           const netVotes = upvoteCount - downvoteCount;
 
-          // Return the deal with vote counts
+          // Get the current user's vote for this deal
+          let userVote = null;
+          if (user_id) {
+            const userVoteResult = await client.query(
+              "SELECT vote_type FROM votes WHERE deal_id = $1 AND user_id = $2 LIMIT 1",
+              [deal.deal_id, user_id]
+            );
+            if (userVoteResult.rows.length > 0) {
+              userVote = userVoteResult.rows[0].vote_type;
+            }
+          }
+
           return {
-            ...deal, // Include all deal properties
+            ...deal,
             up_votes: upvoteCount,
             down_votes: downvoteCount,
             net_votes: netVotes,
+            user_vote: userVote, // <-- Add this
           };
         })
       );
 
-      res.json(dealsWithVotes); // Return the list of deals with vote counts
+      res.json(dealsWithVotes);
     }
   } catch (err) {
     console.log(err.stack);
@@ -690,59 +758,60 @@ app.get("/deals/user/:user_id", authenticateToken, async (req, res) => {
 
 // -------------- Vote a deal (up/down)-------------- CHECKED, WORKS! - Duplicaate to the remove vote endpoint
 
-app.post("/deals/vote", authenticateToken, async (req, res) => {
-  const { deal_id, vote_type } = req.body; // Expecting 'up' or 'down' for vote_type
-  const user_id = req.user.uid; // Get the user ID from the authenticated user
-  // Convert deal_id to integer (in case it comes in as a string like "1")
-  // const deal_id_int = parseInt(deal_id, 10);
+// app.post("/deals/vote", authenticateToken, async (req, res) => {
+//   const { deal_id, vote_type } = req.body; // Expecting 'up' or 'down' for vote_type
+//   const user_id = req.user.uid; // Get the user ID from the authenticated user
+//   // Convert deal_id to integer (in case it comes in as a string like "1")
+//   // const deal_id_int = parseInt(deal_id, 10);
 
-  const client = await pool.connect();
+//   const client = await pool.connect();
 
-  try {
-    // Check if the deal exists
-    const dealExists = await client.query(
-      "SELECT * FROM deal WHERE deal_id = $1 AND is_active = true",
-      [deal_id_int]
-    );
+//   try {
+//     // Check if the deal exists
+//     const dealExists = await client.query(
+//       "SELECT * FROM deal WHERE deal_id = $1 AND is_active = true",
+//       [deal_id_int]
+//     );
 
-    if (dealExists.rows.length === 0) {
-      return res.status(404).json({ error: "Deal not found or inactive" });
-    }
+//     if (dealExists.rows.length === 0) {
+//       return res.status(404).json({ error: "Deal not found or inactive" });
+//     }
 
-    // Check if the user has already voted on this deal.
-    const existingVote = await client.query(
-      "SELECT * FROM votes WHERE user_id = $1 AND deal_id = $2",
-      [user_id, deal_id_int]
-    );
+//     // Check if the user has already voted on this deal.
+//     const existingVote = await client.query(
+//       "SELECT * FROM votes WHERE user_id = $1 AND deal_id = $2",
+//       [user_id, deal_id_int]
+//     );
 
-    if (existingVote.rows.length > 0) {
-      // User has already voted, update the vote type
-      const updatedVote = await client.query(
-        "UPDATE votes SET vote_type = $1 WHERE user_id = $2 AND deal_id = $3 RETURNING *",
-        [vote_type, user_id, deal_id_int]
-      );
-      res.json(updatedVote.rows[0]); // Return the updated vote
-    } else {
-      // User has not voted yet, insert a new vote
-      const newVote = await client.query(
-        "INSERT INTO votes (user_id, deal_id, vote_type) VALUES ($1, $2, $3) RETURNING *",
-        [user_id, deal_id_int, vote_type]
-      );
-      res.json(newVote.rows[0]); // Return the new vote
-    }
-  } catch (err) {
-    console.log(err.stack);
-    res
-      .status(500)
-      .json({ error: "Something went wrong, please try again later!" });
-  } finally {
-    client.release();
-  }
-});
+//     if (existingVote.rows.length > 0) {
+//       // User has already voted, update the vote type
+//       const updatedVote = await client.query(
+//         "UPDATE votes SET vote_type = $1 WHERE user_id = $2 AND deal_id = $3 RETURNING *",
+//         [vote_type, user_id, deal_id_int]
+//       );
+//       res.json(updatedVote.rows[0]); // Return the updated vote
+//     } else {
+//       // User has not voted yet, insert a new vote
+//       const newVote = await client.query(
+//         "INSERT INTO votes (user_id, deal_id, vote_type) VALUES ($1, $2, $3) RETURNING *",
+//         [user_id, deal_id_int, vote_type]
+//       );
+//       res.json(newVote.rows[0]); // Return the new vote
+//     }
+//   } catch (err) {
+//     console.log(err.stack);
+//     res
+//       .status(500)
+//       .json({ error: "Something went wrong, please try again later!" });
+//   } finally {
+//     client.release();
+//   }
+// });
 
 // -------------- Add or Remove vote -------------- CHECKED, WORKS!
 
-app.put("/deals/addorremove/vote", authenticateToken, async (req, res) => {
+app.put("/deals/addremove/vote", authenticateToken, async (req, res) => {
+  console.log("Vote endpoint hit");
   const { deal_id, vote_type } = req.body; // vote_type should be 'up' or 'down'
   const user_id = String(req.user.uid);
   // const deal_id = parseInt(deal_id, 10); // Convert to integer
