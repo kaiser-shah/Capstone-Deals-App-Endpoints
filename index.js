@@ -529,7 +529,6 @@ app.post("/deals", authenticateToken, async (req, res) => {
     original_price,
     deal_url,
     image_url,
-    created_at,
   } = req.body;
   const client = await pool.connect();
 
@@ -716,6 +715,65 @@ app.delete("/deals/:deal_id", authenticateToken, async (req, res) => {
   }
 });
 
+// -------------- Reactivate a soft-deleted deal --------------
+
+app.put("/deals/:deal_id/reactivate", authenticateToken, async (req, res) => {
+  const { deal_id } = req.params;
+  const user_id = req.user.uid;
+  const client = await pool.connect();
+
+  try {
+    // Check if the deal exists
+    const dealResult = await client.query(
+      "SELECT * FROM deal WHERE deal_id = $1",
+      [deal_id]
+    );
+
+    if (dealResult.rows.length === 0) {
+      return res.status(404).json({ error: "Deal not found" });
+    }
+
+    // Only the owner or an admin can reactivate
+    const isOwner = dealResult.rows[0].user_id === user_id;
+    let adminCheck = false;
+    if (!isOwner) {
+      const adminResult = await client.query(
+        "SELECT is_admin FROM users WHERE user_id = $1",
+        [user_id]
+      );
+      adminCheck = adminResult.rows[0]?.is_admin === true;
+    }
+
+    if (!isOwner && !adminCheck) {
+      return res
+        .status(403)
+        .json({ error: "You are not authorized to reactivate this deal" });
+    }
+
+    if (dealResult.rows[0].is_active) {
+      return res.status(400).json({ error: "Deal is already active" });
+    }
+
+    // Reactivate the deal
+    const reactivateResult = await client.query(
+      "UPDATE deal SET is_active = true, updated_at = CURRENT_TIMESTAMP WHERE deal_id = $1 RETURNING *",
+      [deal_id]
+    );
+
+    res.json({
+      message: `The deal with ID ${deal_id} has been reactivated`,
+      deal: reactivateResult.rows[0],
+    });
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
 // -------------- Get deals by specific user -------------- CHECKED, WORKS!
 
 app.get("/deals/user/:user_id", authenticateToken, async (req, res) => {
@@ -744,6 +802,49 @@ app.get("/deals/user/:user_id", authenticateToken, async (req, res) => {
     }
 
     res.json(userDeals.rows); // Return the user's deals
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// -------------- Get all categories with their associated deals --------------
+
+app.get("/categories-with-deals", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    // Get all categories
+    const categoriesResult = await client.query(
+      "SELECT category_id, category_name FROM categories"
+    );
+    const categories = categoriesResult.rows;
+
+    // Get all active deals with their category_id
+    const dealsResult = await client.query(
+      `SELECT d.*, 
+              di.image_url as primary_image_url,
+              u.username,
+              u.profile_pic,
+              c.category_name
+         FROM deal d
+         LEFT JOIN deal_images di ON d.deal_id = di.deal_id AND di.is_primary_pic = true
+         LEFT JOIN users u ON d.user_id = u.user_id
+         LEFT JOIN categories c ON d.category_id = c.category_id
+         WHERE d.is_active = true`
+    );
+    const deals = dealsResult.rows;
+
+    // Map deals to their categories
+    const categoriesWithDeals = categories.map((cat) => ({
+      ...cat,
+      deals: deals.filter((deal) => deal.category_id === cat.category_id),
+    }));
+
+    res.json(categoriesWithDeals);
   } catch (err) {
     console.log(err.stack);
     res
@@ -890,6 +991,63 @@ app.put("/deals/addremove/vote", authenticateToken, async (req, res) => {
   }
 });
 // 5. DEAL IMAGES ENDPOINTS
+
+// -------------- Upload and update user profile picture --------------
+app.post(
+  "/user/profile-pic",
+  authenticateToken,
+  upload.single("profile_pic"),
+  async (req, res) => {
+    const user_id = req.user.uid;
+
+    if (!req.file) {
+      return res.status(400).json({ error: "No image file provided" });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      // Optional: Get the current profile_pic URL to delete the old image from Cloudinary
+      const userResult = await client.query(
+        "SELECT profile_pic FROM users WHERE user_id = $1",
+        [user_id]
+      );
+      const oldPicUrl = userResult.rows[0]?.profile_pic;
+
+      // Upload new image to Cloudinary (profile folder)
+      const uploadResult = await uploadToCloudinary(req.file.buffer, "profile");
+
+      // Update user's profile_pic in the database
+      const updateResult = await client.query(
+        "UPDATE users SET profile_pic = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2 RETURNING profile_pic",
+        [uploadResult.secure_url, user_id]
+      );
+
+      // Delete old image from Cloudinary if it exists and is in the 'profile' folder
+      if (oldPicUrl && oldPicUrl.includes("/profile/")) {
+        const urlParts = oldPicUrl.split("/");
+        const publicIdWithExt = urlParts[urlParts.length - 1];
+        const publicId = publicIdWithExt.split(".")[0];
+        const folderPublicId = `profile/${publicId}`;
+        try {
+          await cloudinary.uploader.destroy(folderPublicId);
+        } catch (cloudinaryError) {
+          console.error("Cloudinary deletion error:", cloudinaryError);
+        }
+      }
+
+      res.json({
+        message: "Profile picture updated successfully",
+        profile_pic: uploadResult.secure_url,
+      });
+    } catch (error) {
+      console.error("Profile pic upload error:", error);
+      res.status(500).json({ error: "Failed to update profile picture" });
+    } finally {
+      client.release();
+    }
+  }
+);
 
 // -------------- Upload single image for a deal --------------
 app.post(
