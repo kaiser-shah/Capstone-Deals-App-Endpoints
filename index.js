@@ -487,7 +487,7 @@ app.get("/deals", tryAuthenticateToken, async (req, res) => {
   }
 });
 
-// Get single deal with full details CHECKED, WORKS!
+// -------------- Get single deal with full details -------------- CHECKED, WORKS!
 
 app.get("/deals/:deal_id", async (req, res) => {
   const { deal_id } = req.params;
@@ -512,6 +512,71 @@ app.get("/deals/:deal_id", async (req, res) => {
     res
       .status(500)
       .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// Get full deal details including all images and category info
+
+app.get("/deals/:deal_id/full", async (req, res) => {
+  const { deal_id } = req.params;
+  const client = await pool.connect();
+  try {
+    // Get deal info with user info
+    const dealResult = await client.query(
+      `SELECT d.*, u.username, u.profile_pic, c.category_name
+FROM deal d
+LEFT JOIN users u ON d.user_id = u.user_id
+LEFT JOIN categories c ON d.category_id = c.category_id
+WHERE d.deal_id = $1 AND d.is_active = true`,
+      [deal_id]
+    );
+    if (dealResult.rows.length === 0) {
+      return res.status(404).json({ error: "Deal not found" });
+    }
+
+    // Get all images for this deal
+    const imagesResult = await client.query(
+      "SELECT * FROM deal_images WHERE deal_id = $1 ORDER BY display_order ASC",
+      [deal_id]
+    );
+
+    // Return deal info and images
+    res.json({
+      ...dealResult.rows[0],
+      images: imagesResult.rows,
+    });
+  } catch (err) {
+    console.log(err.stack);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later!" });
+  } finally {
+    client.release();
+  }
+});
+
+// -------------- Get all images for this deal --------------
+
+app.get("/deals/:deal_id/images", async (req, res) => {
+  const { deal_id } = req.params;
+  const client = await pool.connect();
+
+  try {
+    const images = await client.query(
+      "SELECT * FROM deal_images WHERE deal_id = $1 ORDER BY display_order ASC",
+      [deal_id]
+    );
+
+    if (images.rows.length === 0) {
+      return res.status(404).json({ error: "No images found for this deal" });
+    }
+
+    res.json(images.rows);
+  } catch (error) {
+    console.error("Get images error:", error);
+    res.status(500).json({ error: "Failed to retrieve images" });
   } finally {
     client.release();
   }
