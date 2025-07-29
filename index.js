@@ -3,11 +3,63 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { Pool } from "pg";
 import admin from "firebase-admin";
+import { v2 as cloudinary } from "cloudinary";
+import multer from "multer";
 
 // Load environment variables
 dotenv.config();
 
 const { DATABASE_URL } = process.env;
+
+// Cloudinary configuration
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// Configure Multer for handling file uploads (memory storage)
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Only allow image files
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed!"), false);
+    }
+  },
+});
+
+// Helper function to upload image to Cloudinary
+const uploadToCloudinary = (fileBuffer, folder = "deals") => {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader
+      .upload_stream(
+        {
+          resource_type: "image",
+          folder: folder,
+          transformation: [
+            { width: 800, height: 600, crop: "limit" },
+            { quality: "auto" },
+            { format: "auto" },
+          ],
+        },
+        (error, result) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(result);
+          }
+        }
+      )
+      .end(fileBuffer);
+  });
+};
 
 // Firebase service account setup
 const serviceAccount = {
