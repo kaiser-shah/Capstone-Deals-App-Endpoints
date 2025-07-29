@@ -737,45 +737,54 @@ app.put("/deals/:deal_id", authenticateToken, async (req, res) => {
 // -------------- Soft delete deal (set is_active = false) -------------- CHECKED, WORKS!
 
 app.delete("/deals/:deal_id", authenticateToken, async (req, res) => {
-  const { deal_id } = req.params; // Get the deal ID from the URL parameters
-  const user_id = req.user.uid; // Get the user ID from the authenticated user
+  const { deal_id } = req.params;
+  const user_id = req.user.uid;
   const client = await pool.connect();
 
   try {
-    // Check if the user id matches the deal's user_id or if the user is an admin
+    // Check if the deal exists and get deal info
     const check_user = await client.query(
       "SELECT * FROM deal WHERE deal_id = $1",
       [deal_id]
     );
+
     if (check_user.rows.length === 0) {
       return res.status(404).json({ error: "Deal not found" });
     }
 
+    // Check if user is admin
+    const adminCheck = await client.query(
+      "SELECT is_admin FROM users WHERE user_id = $1",
+      [user_id]
+    );
+
+    const isAdmin = adminCheck.rows.length > 0 && adminCheck.rows[0].is_admin;
+
+    // Now you can use isAdmin safely
     if (check_user.rows[0].user_id !== user_id && !isAdmin) {
-      // Check if the user is not the owner of the deal and not an admin
-      return res
-        .status(403)
-        .json({ error: "You are not authorized to remove this deal" });
+      return res.status(403).json({
+        error: "You are not authorized to remove this deal",
+      });
     }
+
     if (!check_user.rows[0].is_active) {
       return res.status(400).json({ error: "Deal is already inactive" });
-    } else {
-      // Soft delete the deal by setting is_active to false
-      const softDeleteDeal = await client.query(
-        "UPDATE deal SET is_active = false, updated_at = CURRENT_TIMESTAMP WHERE deal_id = $1 RETURNING *",
-        [deal_id]
-      );
-
-      if (softDeleteDeal.rows.length === 0) {
-        return res.status(404).json({ error: "Deal not found or removed" });
-      } else {
-        // Deal soft deleted successfully
-        res.json({
-          message: `The deal with ID ${deal_id} has been successfully removed`,
-          deal: softDeleteDeal.rows[0],
-        });
-      }
     }
+
+    // Soft delete the deal
+    const softDeleteDeal = await client.query(
+      "UPDATE deal SET is_active = false, updated_at = CURRENT_TIMESTAMP WHERE deal_id = $1 RETURNING *",
+      [deal_id]
+    );
+
+    if (softDeleteDeal.rows.length === 0) {
+      return res.status(404).json({ error: "Deal not found or removed" });
+    }
+
+    res.json({
+      message: `The deal with ID ${deal_id} has been successfully removed`,
+      deal: softDeleteDeal.rows[0],
+    });
   } catch (err) {
     console.log(err.stack);
     res
@@ -804,23 +813,23 @@ app.put("/deals/:deal_id/reactivate", authenticateToken, async (req, res) => {
       return res.status(404).json({ error: "Deal not found" });
     }
 
-    // Only the owner or an admin can reactivate
+    // Check if user is admin
+    const adminCheck = await client.query(
+      "SELECT is_admin FROM users WHERE user_id = $1",
+      [user_id]
+    );
+
+    const isAdmin = adminCheck.rows.length > 0 && adminCheck.rows[0].is_admin;
     const isOwner = dealResult.rows[0].user_id === user_id;
-    let adminCheck = false;
-    if (!isOwner) {
-      const adminResult = await client.query(
-        "SELECT is_admin FROM users WHERE user_id = $1",
-        [user_id]
-      );
-      adminCheck = adminResult.rows[0]?.is_admin === true;
+
+    // Only the owner or an admin can reactivate
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({
+        error: "You are not authorized to reactivate this deal",
+      });
     }
 
-    if (!isOwner && !adminCheck) {
-      return res
-        .status(403)
-        .json({ error: "You are not authorized to reactivate this deal" });
-    }
-
+    // Check if deal is already active
     if (dealResult.rows[0].is_active) {
       return res.status(400).json({ error: "Deal is already active" });
     }
