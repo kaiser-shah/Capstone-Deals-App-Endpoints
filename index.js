@@ -181,7 +181,13 @@ const isAdmin = async (req, res, next) => {
 let app = express();
 
 //Middleware Setup
-app.use(cors()); // Enable CORS for all routes
+app.use(
+  cors({
+    origin: ["https://capstone-deals-app.vercel.app", "http://localhost:3000"],
+    credentials: true,
+  })
+); // Enable CORS for all routes
+
 app.use(express.json()); // Enables JSON parsing into req.body
 
 // Setup connection pool for postgreSQL
