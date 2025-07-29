@@ -148,6 +148,14 @@ const authenticateToken = async (req, res, next) => {
   }
 };
 
+// Setup connection pool for postgreSQL
+const pool = new Pool({
+  connectionString: DATABASE_URL, // Use the DATABASE_URL environment variable for the connection string
+  ssl: {
+    rejectUnauthorized: false, // Disable SSL certificate verification (for local development only)
+  },
+});
+
 // Middleware to check if the user is an admin
 const isAdmin = async (req, res, next) => {
   try {
@@ -190,14 +198,6 @@ app.use(
 
 app.use(express.json()); // Enables JSON parsing into req.body
 
-// Setup connection pool for postgreSQL
-const pool = new Pool({
-  connectionString: DATABASE_URL, // Use the DATABASE_URL environment variable for the connection string
-  ssl: {
-    rejectUnauthorized: false, // Disable SSL certificate verification (for local development only)
-  },
-});
-
 // Check the PostgreSQL version to test the connection
 async function getPostgreVersion() {
   const client = await pool.connect();
@@ -209,7 +209,7 @@ async function getPostgreVersion() {
   }
 }
 
-getPostgreVersion();
+// getPostgreVersion();
 
 // 1. USER ENDPOINTS (Firebase Auth Integration)
 
