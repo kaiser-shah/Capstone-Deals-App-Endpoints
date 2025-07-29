@@ -86,6 +86,82 @@ console.log("Private Key ID:", process.env.FIREBASE_PRIVATE_KEY_ID);
 console.log("Private Key exists:", !!process.env.FIREBASE_PRIVATE_KEY);
 console.log("Client Email:", process.env.FIREBASE_CLIENT_EMAIL);
 
+// Try-authenticate middleware
+const tryAuthenticateToken = async (req, res, next) => {
+  const authHeader = req.headers["authorization"];
+  if (!authHeader) {
+    req.user = null;
+    return next();
+  }
+  const token = authHeader.split(" ")[1];
+  if (!token) {
+    req.user = null;
+    return next();
+  }
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+    };
+  } catch (error) {
+    req.user = null;
+  }
+  next();
+};
+
+// Authenticate middleware
+const authenticateToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers["authorization"];
+    const token = authHeader && authHeader.split(" ")[1];
+
+    if (!token) {
+      return res.status(401).json({ error: "Access token required" });
+    }
+
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    console.log(decodedToken);
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+    };
+
+    next();
+  } catch (error) {
+    console.error("Token verification error:", error);
+    res.status(403).json({ error: "Invalid or expired token" });
+  }
+};
+
+// Admin check middleware
+const isAdmin = async (req, res, next) => {
+  try {
+    const user_id = req.user.uid;
+    const client = await pool.connect();
+
+    try {
+      const checkAdmin = await client.query(
+        "SELECT is_admin FROM users WHERE user_id = $1",
+        [user_id]
+      );
+
+      if (checkAdmin.rows.length === 0 || !checkAdmin.rows[0].is_admin) {
+        return res.status(403).json({ error: "Access denied. Admins only." });
+      }
+
+      next();
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error("Admin check error:", error);
+    res
+      .status(500)
+      .json({ error: "Something went wrong during admin verification." });
+  }
+};
+
 // Setup connection pool for postgreSQL
 const pool = new Pool({
   connectionString: DATABASE_URL,
