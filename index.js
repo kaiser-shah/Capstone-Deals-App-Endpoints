@@ -183,10 +183,7 @@ let app = express();
 //Middleware Setup
 app.use(
   cors({
-    origin: [
-      "https://capstone-deals-app-endpoints.vercel.app",
-      "http://localhost:3000",
-    ],
+    origin: ["https://capstone-deals-app.vercel.app", "http://localhost:3000"],
     credentials: true,
   })
 ); // Enable CORS for all routes
