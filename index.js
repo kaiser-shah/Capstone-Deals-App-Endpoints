@@ -29,6 +29,11 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
+// Check if variables are loaded (these console.logs were in your original code)
+console.log("Private Key ID:", process.env.FIREBASE_PRIVATE_KEY_ID);
+console.log("Private Key exists:", !!process.env.FIREBASE_PRIVATE_KEY);
+console.log("Client Email:", process.env.FIREBASE_CLIENT_EMAIL);
+
 // Setup connection pool for postgreSQL
 const pool = new Pool({
   connectionString: DATABASE_URL,
