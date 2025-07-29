@@ -1,9 +1,20 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import { Pool } from "pg";
 
 // Load environment variables
 dotenv.config();
+
+const { DATABASE_URL } = process.env;
+
+// Setup connection pool for postgreSQL
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
 
 const app = express();
 
@@ -29,6 +40,24 @@ app.get("/test", (req, res) => {
     hasDbUrl: !!process.env.DATABASE_URL,
     hasCloudinary: !!process.env.CLOUDINARY_CLOUD_NAME,
   });
+});
+
+// Test database connection
+app.get("/db-test", async (req, res) => {
+  try {
+    const client = await pool.connect();
+    const result = await client.query("SELECT version()");
+    client.release();
+    res.json({
+      message: "Database connection successful!",
+      version: result.rows[0].version,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Database connection failed",
+      error: error.message,
+    });
+  }
 });
 
 export default app;
