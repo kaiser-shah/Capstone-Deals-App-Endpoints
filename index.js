@@ -183,7 +183,10 @@ let app = express();
 //Middleware Setup
 app.use(
   cors({
-    origin: ["https://capstone-deals-app.vercel.app", "http://localhost:3000"],
+    origin: [
+      "https://capstone-deals-app-endpoints.vercel.app",
+      "http://localhost:3000",
+    ],
     credentials: true,
   })
 ); // Enable CORS for all routes
@@ -1416,6 +1419,4 @@ app.get("/", (req, res) => {
 });
 // ----------- TELLS EXPRESS TO START THE SERVER AND LISTEN FOR REQUESTS -----------
 
-app.listen(3000, () => {
-  console.log("App is listening on port 3000");
-});
+export default app;
