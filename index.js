@@ -13,7 +13,10 @@ let app = express();
 //Middleware Setup
 app.use(
   cors({
-    origin: ["https://capstone-deals-app.vercel.app", "http://localhost:3000"],
+    origin: [
+      "capstone-deals-8sqwsv0w4-kaiser-shahs-projects.vercel.app",
+      "http://localhost:3000",
+    ],
     credentials: true,
   })
 );
