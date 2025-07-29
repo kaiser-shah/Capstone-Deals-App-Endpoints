@@ -7,6 +7,19 @@ import multer from "multer"; // Multer for handling multipart/form-data, used fo
 import dotenv from "dotenv"; // Dotenv for loading environment variables from a .env file
 dotenv.config(); // Dotenv module for loading environment variables from a .env file
 
+// Initialise the express app
+let app = express();
+
+//Middleware Setup
+app.use(
+  cors({
+    origin: ["https://capstone-deals-app.vercel.app", "http://localhost:3000"],
+    credentials: true,
+  })
+);
+// Enable CORS for all routes
+
+app.use(express.json()); // Enables JSON parsing into req.body
 // Cloudinary configuration
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -184,19 +197,6 @@ const isAdmin = async (req, res, next) => {
       .json({ error: "Something went wrong during admin verification." });
   }
 };
-
-// Initialise the express app
-let app = express();
-
-//Middleware Setup
-app.use(
-  cors({
-    origin: ["https://capstone-deals-app.vercel.app", "http://localhost:3000"],
-    credentials: true,
-  })
-); // Enable CORS for all routes
-
-app.use(express.json()); // Enables JSON parsing into req.body
 
 // Check the PostgreSQL version to test the connection
 async function getPostgreVersion() {
