@@ -15,7 +15,7 @@ app.use(
   cors({
     origin: [
       "capstone-deals-8sqwsv0w4-kaiser-shahs-projects.vercel.app",
-      "http://localhost:3000",
+      "http://localhost:5173",
     ],
     credentials: true,
   })
@@ -1428,4 +1428,6 @@ app.get("/", (req, res) => {
 });
 // ----------- TELLS EXPRESS TO START THE SERVER AND LISTEN FOR REQUESTS -----------
 
-export default app;
+app.listen(3000, () => {
+  console.log("App is listening on port 3000");
+});
