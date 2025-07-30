@@ -11,15 +11,7 @@ dotenv.config(); // Dotenv module for loading environment variables from a .env 
 let app = express();
 
 //Middleware Setup
-app.use(
-  cors({
-    origin: [
-      "capstone-deals-8sqwsv0w4-kaiser-shahs-projects.vercel.app",
-      "http://localhost:3000",
-    ],
-    credentials: true,
-  })
-);
+app.use(cors());
 // Enable CORS for all routes
 
 app.use(express.json()); // Enables JSON parsing into req.body
