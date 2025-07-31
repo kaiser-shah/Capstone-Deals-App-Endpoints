@@ -74,7 +74,8 @@ import admin from "firebase-admin";
 
 // Postgres client setup
 import { Pool } from "pg"; // PostgreSQL client for connecting to the database
-import firebase from "firebase/compat/app"; // Firebase compatibility layer for using Firebase features
+import { firebase } from "firebase/compat/app"; // Firebase compatibility layer for using Firebase features
+import { initializeApp } from "firebase/app"; // Firebase app initialization
 import { userInfo } from "os"; // Importing userInfo from the OS module (not used in this code)
 const { DATABASE_URL, SECRET_KEY } = process.env; // Loading the database URL and secret key from the environment variables
 
@@ -1427,4 +1428,3 @@ app.listen(3000, () => {
 
 export default serverless(app); // Export the serverless app for deployment
 // This allows the app to be used in a serverless environment like AWS Lambda
-// Ensure you have the necessary serverless framework and configurations set up for deployment
