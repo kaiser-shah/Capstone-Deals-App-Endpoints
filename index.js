@@ -1421,9 +1421,5 @@ app.get("/", (req, res) => {
 });
 // ----------- TELLS EXPRESS TO START THE SERVER AND LISTEN FOR REQUESTS -----------
 
-app.listen(3000, () => {
-  console.log("App is listening on port 3000");
-});
-
 export default serverless(app); // Export the serverless app for deployment
 // This allows the app to be used in a serverless environment like AWS Lambda
