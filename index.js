@@ -74,9 +74,6 @@ import admin from "firebase-admin";
 
 // Postgres client setup
 import { Pool } from "pg"; // PostgreSQL client for connecting to the database
-import firebase from "firebase/compat/app"; // Firebase compatibility layer for using Firebase features
-import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
 import { userInfo } from "os"; // Importing userInfo from the OS module (not used in this code)
 const { DATABASE_URL, SECRET_KEY } = process.env; // Loading the database URL and secret key from the environment variables
 
