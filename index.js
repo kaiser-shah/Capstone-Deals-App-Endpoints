@@ -1413,7 +1413,7 @@ app.put(
 // 6. SEARCH & FILTERING ENDPOINTS
 
 // 7. ADMIN ENDPOINTS (For managing users, deals, and categories)
-
+console.log("testing admin endpoints");
 // ------------ WELCOME MESSAGE WHEN THE API RUNS --------------
 app.get("/", (req, res) => {
   res.json({ message: "Welcome to Shah's deal page. ver 7" });
