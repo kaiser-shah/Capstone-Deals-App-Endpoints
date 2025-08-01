@@ -701,7 +701,7 @@ app.put("/deals/:deal_id", authenticateToken, async (req, res) => {
         [
           title,
           description,
-          category_id, // This should be the ID of the category, not the name
+          category_id, // This should be the ID of the category, not the name.
           price,
           original_price,
           deal_url,
