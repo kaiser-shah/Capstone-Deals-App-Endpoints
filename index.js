@@ -520,7 +520,7 @@ app.get("/deals/:deal_id", async (req, res) => {
 
 // Get full deal details including all images and category info
 
-app.get("/deals/:deal_id/full", authenticateToken, async (req, res) => {
+app.get("/deals/:deal_id/full", async (req, res) => {
   const { deal_id } = req.params;
   const client = await pool.connect();
   try {
