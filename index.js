@@ -274,31 +274,39 @@ app.get("/user/exists", async (req, res) => {
   }
 });
 
-// -------------- Get user details from the username --------------
+// -------------- Get user and deal details from the username --------------
 
 app.get("/user/:username", async (req, res) => {
   const { username } = req.params;
-  const client = await pool.connect(); // Connect to the PostgreSQL database
-
+  const client = await pool.connect();
   try {
-    // Query the database for user details by username
-    const result = await client.query(
+    // Get user details
+    const userResult = await client.query(
       "SELECT user_id, username, profile_pic, created_at FROM users WHERE username = $1",
       [username]
     );
 
-    if (result.rows.length === 0) {
-      // If no user found, return 404
+    if (userResult.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // Return the user details
-    res.json({ details: result.rows[0] });
+    const userDetails = userResult.rows[0];
+
+    // Get deals created by this user
+    const dealsResult = await client.query(
+      "SELECT * FROM deal WHERE user_id = $1 AND is_active = true",
+      [userDetails.user_id]
+    );
+
+    res.json({
+      user: userDetails,
+      deals: dealsResult.rows,
+    });
   } catch (err) {
-    console.error("Error fetching user details:", err);
-    res
-      .status(500)
-      .json({ error: "Something went wrong, please try again later" });
+    console.error(err);
+    res.status(500).json({ error: "Database error" });
+  } finally {
+    client.release();
   }
 });
 
@@ -879,7 +887,7 @@ app.put("/deals/:deal_id/reactivate", authenticateToken, async (req, res) => {
 
 // -------------- Get deals by specific user -------------- CHECKED, WORKS!
 
-app.get("/deals/user/:user_id", authenticateToken, async (req, res) => {
+app.get("/deals/user/:user_id", async (req, res) => {
   const { user_id } = req.params; // Get the user ID from the URL parameters
   const client = await pool.connect();
 
