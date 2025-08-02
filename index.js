@@ -274,6 +274,34 @@ app.get("/user/exists", async (req, res) => {
   }
 });
 
+// -------------- Get user details from the username --------------
+
+app.get("/user/:username", async (req, res) => {
+  const { username } = req.params;
+  const client = await pool.connect(); // Connect to the PostgreSQL database
+
+  try {
+    // Query the database for user details by username
+    const result = await client.query(
+      "SELECT user_id, username, profile_pic, created_at FROM users WHERE username = $1",
+      [username]
+    );
+
+    if (result.rows.length === 0) {
+      // If no user found, return 404
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Return the user details
+    res.json({ details: result.rows[0] });
+  } catch (err) {
+    console.error("Error fetching user details:", err);
+    res
+      .status(500)
+      .json({ error: "Something went wrong, please try again later" });
+  }
+});
+
 // -------------- Get current user's profile -------------- CHECKED, WORKS!
 
 app.get("/user/profile", authenticateToken, async (req, res) => {
