@@ -314,7 +314,8 @@ app.get("/user/:username", async (req, res) => {
 // -------------- Get current user's profile -------------- CHECKED, WORKS!
 
 app.get("/user/profile", authenticateToken, async (req, res) => {
-  console.log(req.user);
+  console.log("HIT /user/profile", new Date().toISOString());
+  console.log("req.user:", req.user);
   //This has now been properly protected with Firebase token authentication.
 
   // at this point, the user will have to be logged in so no need for checking if user exists.
