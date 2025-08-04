@@ -105,6 +105,7 @@ admin.initializeApp({
 // Try-authenticate middleware: attaches req.user if token is present and valid, else req.user = null
 const tryAuthenticateToken = async (req, res, next) => {
   const authHeader = req.headers["authorization"];
+  console.log("Authorization Header:", authHeader);
   if (!authHeader) {
     req.user = null;
     return next();
@@ -313,6 +314,7 @@ app.get("/user/:username", async (req, res) => {
 // -------------- Get current user's profile -------------- CHECKED, WORKS!
 
 app.get("/user/profile", authenticateToken, async (req, res) => {
+  console.log(req.user);
   //This has now been properly protected with Firebase token authentication.
 
   // at this point, the user will have to be logged in so no need for checking if user exists.
@@ -1446,10 +1448,6 @@ app.put(
   }
 );
 
-// 6. SEARCH & FILTERING ENDPOINTS
-
-// 7. ADMIN ENDPOINTS (For managing users, deals, and categories)
-console.log("testing admin endpoints");
 // ------------ WELCOME MESSAGE WHEN THE API RUNS --------------
 app.get("/", (req, res) => {
   res.json({ message: "Welcome to Shah's deal page. ver 7" });
