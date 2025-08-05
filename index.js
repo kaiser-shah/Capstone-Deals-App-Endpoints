@@ -275,6 +275,36 @@ app.get("/user/exists", async (req, res) => {
   }
 });
 
+// -------------- Get current user's profile -------------- CHECKED, WORKS!
+
+app.get("/user/profile", authenticateToken, async (req, res) => {
+  // console.log("HIT /user/profile", new Date().toISOString());
+  console.log("req.user:", req.user.uid);
+  //This has now been properly protected with Firebase token authentication.
+
+  // at this point, the user will have to be logged in so no need for checking if user exists.
+
+  try {
+    const user_id = req.user.uid; // From Firebase token via middleware
+    const client = await pool.connect();
+    // Query using Firebase User ID, not internal database user ID
+    const result = await client.query(
+      "SELECT * FROM users WHERE user_id = $1",
+      [user_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json({ details: result.rows[0] });
+    client.release();
+  } catch (err) {
+    res
+      .status(400)
+      .json({ error: "Something went wrong, please try again later" });
+  }
+});
+
 // -------------- Get user and deal details from the username --------------
 
 app.get("/user/:username", async (req, res) => {
@@ -326,36 +356,6 @@ app.get("/test-route", (req, res) => {
     message: "Route is working!",
     timestamp: new Date().toISOString(),
   });
-});
-
-// -------------- Get current user's profile -------------- CHECKED, WORKS!
-
-app.get("/user/profile", authenticateToken, async (req, res) => {
-  // console.log("HIT /user/profile", new Date().toISOString());
-  console.log("req.user:", req.user.uid);
-  //This has now been properly protected with Firebase token authentication.
-
-  // at this point, the user will have to be logged in so no need for checking if user exists.
-
-  try {
-    const user_id = req.user.uid; // From Firebase token via middleware
-    const client = await pool.connect();
-    // Query using Firebase User ID, not internal database user ID
-    const result = await client.query(
-      "SELECT * FROM users WHERE user_id = $1",
-      [user_id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "User not found" });
-    }
-    res.json({ details: result.rows[0] });
-    client.release();
-  } catch (err) {
-    res
-      .status(400)
-      .json({ error: "Something went wrong, please try again later" });
-  }
 });
 
 // -------------- Update user profile -------------- CHECKED, WORKS!
