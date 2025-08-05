@@ -311,7 +311,7 @@ app.get("/user/:username", async (req, res) => {
   }
 });
 
-// -------------- Testing --------------
+// -------------- Testing 1 --------------
 
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
@@ -319,10 +319,19 @@ app.use((req, res, next) => {
   next();
 });
 
+// -------------- Testing 2 --------------
+
+app.get("/test-route", (req, res) => {
+  res.json({
+    message: "Route is working!",
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // -------------- Get current user's profile -------------- CHECKED, WORKS!
 
 app.get("/user/profile", authenticateToken, async (req, res) => {
-  console.log("HIT /user/profile", new Date().toISOString());
+  // console.log("HIT /user/profile", new Date().toISOString());
   console.log("req.user:", req.user.uid);
   //This has now been properly protected with Firebase token authentication.
 
