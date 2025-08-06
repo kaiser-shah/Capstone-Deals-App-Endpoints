@@ -277,7 +277,7 @@ app.get("/user/exists", async (req, res) => {
 
 // -------------- Get current user's profile -------------- CHECKED, WORKS!
 
-app.get("/user/profile", authenticateToken, async (req, res) => {
+app.get("/user", authenticateToken, async (req, res) => {
   // console.log("HIT /user/profile", new Date().toISOString());
   console.log("req.user:", req.user.uid);
   //This has now been properly protected with Firebase token authentication.
@@ -583,10 +583,10 @@ app.get("/deals/:deal_id/full", async (req, res) => {
     // Get deal info with user info
     const dealResult = await client.query(
       `SELECT d.*, u.username, u.profile_pic, c.category_name
-FROM deal d
-LEFT JOIN users u ON d.user_id = u.user_id
-LEFT JOIN categories c ON d.category_id = c.category_id
-WHERE d.deal_id = $1 AND d.is_active = true`,
+       FROM deal d
+       LEFT JOIN users u ON d.user_id = u.user_id
+       LEFT JOIN categories c ON d.category_id = c.category_id
+       WHERE d.deal_id = $1 AND d.is_active = true`,
       [deal_id]
     );
     if (dealResult.rows.length === 0) {
@@ -599,16 +599,29 @@ WHERE d.deal_id = $1 AND d.is_active = true`,
       [deal_id]
     );
 
-    // Return deal info and images
+    // Get upvotes and downvotes
+    const upvoteResult = await client.query(
+      "SELECT COUNT(*) FROM votes WHERE deal_id = $1 AND vote_type = 'up'",
+      [deal_id]
+    );
+    const downvoteResult = await client.query(
+      "SELECT COUNT(*) FROM votes WHERE deal_id = $1 AND vote_type = 'down'",
+      [deal_id]
+    );
+    const up_votes = parseInt(upvoteResult.rows[0].count, 10);
+    const down_votes = parseInt(downvoteResult.rows[0].count, 10);
+    const net_votes = up_votes - down_votes;
+
+    // Return deal info, images, and net_votes
     res.json({
       ...dealResult.rows[0],
       images: imagesResult.rows,
+      net_votes,
+      up_votes,
+      down_votes,
     });
   } catch (err) {
-    console.log(err.stack);
-    res
-      .status(500)
-      .json({ error: "Something went wrong, please try again later!" });
+    // error handling
   } finally {
     client.release();
   }
