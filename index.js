@@ -612,11 +612,11 @@ app.get("/deals/:deal_id/full", async (req, res) => {
   try {
     // Get deal info with user info
     const dealResult = await client.query(
-      `SELECT d.*, u.username, u.profile_pic, c.category_name
-       FROM deal d
-       LEFT JOIN users u ON d.user_id = u.user_id
-       LEFT JOIN categories c ON d.category_id = c.category_id
-       WHERE d.deal_id = $1 AND d.is_active = true`,
+      `SELECT d.*, u.username, u.profile_pic, u.created_at as user_created_at, c.category_name
+      FROM deal d
+      LEFT JOIN users u ON d.user_id = u.user_id
+      LEFT JOIN categories c ON d.category_id = c.category_id
+      WHERE d.deal_id = $1 AND d.is_active = true`,
       [deal_id]
     );
     if (dealResult.rows.length === 0) {
