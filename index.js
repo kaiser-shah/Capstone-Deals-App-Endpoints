@@ -325,7 +325,14 @@ app.get("/user/:username", async (req, res) => {
 
     // Get deals created by this user
     const dealsResult = await client.query(
-      "SELECT * FROM deal WHERE user_id = $1 AND is_active = true",
+      `SELECT d.*, 
+         di.image_url as primary_image_url,
+         u.username,
+         u.profile_pic
+       FROM deal d
+       LEFT JOIN deal_images di ON d.deal_id = di.deal_id AND di.is_primary_pic = true
+       LEFT JOIN users u ON d.user_id = $1
+       WHERE d.is_active = true`,
       [userDetails.user_id]
     );
 
