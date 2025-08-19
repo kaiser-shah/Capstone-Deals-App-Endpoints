@@ -278,7 +278,6 @@ app.get("/user/exists", async (req, res) => {
 // -------------- Get current user's profile -------------- CHECKED, WORKS!
 
 app.get("/user/profile", authenticateToken, async (req, res) => {
-  // console.log("HIT /user/profile", new Date().toISOString());
   console.log("req.user:", req.user.uid);
   //This has now been properly protected with Firebase token authentication.
 
@@ -1007,7 +1006,7 @@ app.get("/categories-with-deals", async (req, res) => {
     // Get all active deals with their category_id
     const dealsResult = await client.query(
       `SELECT d.*, 
-              di.image_url as primary_image_url,
+              di.p_image_url as primary_image_url,
               u.username,
               u.profile_pic,
               c.category_name
