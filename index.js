@@ -1006,7 +1006,7 @@ app.get("/categories-with-deals", async (req, res) => {
     // Get all active deals with their category_id
     const dealsResult = await client.query(
       `SELECT d.*, 
-              di.imageUrl as primary_image_url,
+              di.image_url as primary_image_url,
               u.username,
               u.profile_pic,
               c.category_name
