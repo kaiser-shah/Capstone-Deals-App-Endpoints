@@ -994,9 +994,11 @@ app.get("/deals/user/:user_id", async (req, res) => {
 
 // -------------- Get all categories with their associated deals --------------
 
-app.get("/categories-with-deals", async (req, res) => {
+app.get("/categories-with-deals", tryAuthenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
+    const user_id = req.user ? req.user.uid : null;
+
     // Get all categories
     const categoriesResult = await client.query(
       "SELECT category_id, category_name FROM categories"
@@ -1018,10 +1020,48 @@ app.get("/categories-with-deals", async (req, res) => {
     );
     const deals = dealsResult.rows;
 
+    // For each deal, get vote counts and user vote
+    const dealsWithVotes = await Promise.all(
+      deals.map(async (deal) => {
+        const upvoteResult = await client.query(
+          "SELECT COUNT(*) FROM votes WHERE deal_id = $1 AND vote_type = 'up'",
+          [deal.deal_id]
+        );
+        const downvoteResult = await client.query(
+          "SELECT COUNT(*) FROM votes WHERE deal_id = $1 AND vote_type = 'down'",
+          [deal.deal_id]
+        );
+        const up_votes = parseInt(upvoteResult.rows[0].count, 10);
+        const down_votes = parseInt(downvoteResult.rows[0].count, 10);
+        const net_votes = up_votes - down_votes;
+
+        let user_vote = null;
+        if (user_id) {
+          const userVoteResult = await client.query(
+            "SELECT vote_type FROM votes WHERE deal_id = $1 AND user_id = $2 LIMIT 1",
+            [deal.deal_id, user_id]
+          );
+          if (userVoteResult.rows.length > 0) {
+            user_vote = userVoteResult.rows[0].vote_type;
+          }
+        }
+
+        return {
+          ...deal,
+          up_votes,
+          down_votes,
+          net_votes,
+          user_vote,
+        };
+      })
+    );
+
     // Map deals to their categories
     const categoriesWithDeals = categories.map((cat) => ({
       ...cat,
-      deals: deals.filter((deal) => deal.category_id === cat.category_id),
+      deals: dealsWithVotes.filter(
+        (deal) => deal.category_id === cat.category_id
+      ),
     }));
 
     res.json(categoriesWithDeals);
