@@ -1398,6 +1398,17 @@ app.post(
         }
       }
 
+      // After uploading all images, set the first image as primary
+      await client.query(
+        `UPDATE deal_images
+         SET is_primary_pic = true
+         WHERE deal_id = $1
+         AND display_order = (
+           SELECT MIN(display_order) FROM deal_images WHERE deal_id = $1
+         )`,
+        [deal_id]
+      );
+
       res.json({
         message: `Successfully uploaded ${uploadedImages.length} images`,
         images: uploadedImages,
