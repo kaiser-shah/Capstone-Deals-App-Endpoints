@@ -513,68 +513,104 @@ app.delete("/categories", authenticateToken, isAdmin, async (req, res) => {
 app.get("/deals", tryAuthenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
-    const user_id = req.user ? req.user.uid : null; // Get the user ID from the authenticated user, or null if not authenticated
+    const user_id = req.user ? req.user.uid : null;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
 
-    let listDeals = await client.query(
-      `SELECT d.*, 
-         di.image_url as primary_image_url,
-         u.username,
-         u.profile_pic
-       FROM deal d
-       LEFT JOIN deal_images di ON d.deal_id = di.deal_id AND di.is_primary_pic = true
-       LEFT JOIN users u ON d.user_id = u.user_id
-       WHERE d.is_active = true`
-    );
+    // Get sorting parameters from query string
+    const sortBy = req.query.sort || "net_votes"; // Default to net_votes
+    const sortOrder = req.query.order || "desc"; // Default to descending
 
-    if (listDeals.rows.length === 0) {
+    // Validate sort parameters to prevent SQL injection
+    const allowedSortFields = [
+      "net_votes",
+      "created_at",
+      "title",
+      "up_votes",
+      "down_votes",
+    ];
+    const allowedOrders = ["asc", "desc"];
+
+    const validSortBy = allowedSortFields.includes(sortBy)
+      ? sortBy
+      : "net_votes";
+    const validOrder = allowedOrders.includes(sortOrder.toLowerCase())
+      ? sortOrder.toUpperCase()
+      : "DESC";
+
+    // Get total count for pagination
+    const countQuery = "SELECT COUNT(*) FROM deal WHERE is_active = true";
+    const countResult = await client.query(countQuery);
+    const totalCount = parseInt(countResult.rows[0].count);
+
+    // Build ORDER BY clause
+    let orderByClause;
+    if (validSortBy === "net_votes") {
+      // For net_votes, we need to calculate it in the ORDER BY
+      orderByClause = `(COALESCE(v.upvotes, 0) - COALESCE(v.downvotes, 0)) ${validOrder}`;
+    } else {
+      // For other fields, reference them directly
+      orderByClause = `d.${validSortBy} ${validOrder}`;
+    }
+
+    // Add secondary sort by creation date to ensure consistent ordering
+    orderByClause += `, d.created_at DESC`;
+
+    const query = `
+      SELECT 
+        d.*,
+        di.image_url as primary_image_url,
+        u.username,
+        u.profile_pic,
+        COALESCE(v.upvotes, 0) as up_votes,
+        COALESCE(v.downvotes, 0) as down_votes,
+        COALESCE(v.upvotes, 0) - COALESCE(v.downvotes, 0) as net_votes,
+        uv.vote_type as user_vote
+      FROM deal d
+      LEFT JOIN deal_images di ON d.deal_id = di.deal_id AND di.is_primary_pic = true
+      LEFT JOIN users u ON d.user_id = u.user_id
+      LEFT JOIN (
+        SELECT 
+          deal_id,
+          COUNT(*) FILTER (WHERE vote_type = 'up') as upvotes,
+          COUNT(*) FILTER (WHERE vote_type = 'down') as downvotes
+        FROM votes
+        GROUP BY deal_id
+      ) v ON d.deal_id = v.deal_id
+      LEFT JOIN votes uv ON d.deal_id = uv.deal_id AND uv.user_id = $1
+      WHERE d.is_active = true
+      ORDER BY ${orderByClause}
+      LIMIT $2 OFFSET $3
+    `;
+
+    const result = await client.query(query, [user_id, limit, offset]);
+
+    if (result.rows.length === 0 && page === 1) {
       return res.status(400).json({
         error: "Could not find any deals. Please add some and try again.",
       });
-    } else {
-      const dealsWithVotes = await Promise.all(
-        listDeals.rows.map(async (deal) => {
-          // Get upvotes, downvotes, net votes
-          const upvoteResult = await client.query(
-            "SELECT COUNT(*) FROM votes WHERE deal_id = $1 AND vote_type = 'up'",
-            [deal.deal_id]
-          );
-          const downvoteResult = await client.query(
-            "SELECT COUNT(*) FROM votes WHERE deal_id = $1 AND vote_type = 'down'",
-            [deal.deal_id]
-          );
-          const upvoteCount = parseInt(upvoteResult.rows[0].count);
-          const downvoteCount = parseInt(downvoteResult.rows[0].count);
-          const netVotes = upvoteCount - downvoteCount;
-
-          // Get the current user's vote for this deal
-          let userVote = null;
-          if (user_id) {
-            const userVoteResult = await client.query(
-              "SELECT vote_type FROM votes WHERE deal_id = $1 AND user_id = $2 LIMIT 1",
-              [deal.deal_id, user_id]
-            );
-            if (userVoteResult.rows.length > 0) {
-              userVote = userVoteResult.rows[0].vote_type;
-            }
-          }
-
-          return {
-            ...deal,
-            up_votes: upvoteCount,
-            down_votes: downvoteCount,
-            net_votes: netVotes,
-            user_vote: userVote, // <-- Add this
-          };
-        })
-      );
-
-      res.json(dealsWithVotes);
     }
+
+    res.json({
+      deals: result.rows,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(totalCount / limit),
+        totalCount,
+        hasNextPage: page < Math.ceil(totalCount / limit),
+        hasPrevPage: page > 1,
+      },
+      sorting: {
+        sortBy: validSortBy,
+        order: validOrder.toLowerCase(),
+      },
+    });
   } catch (err) {
     console.log(err.stack);
-    res
-      .status(500)
-      .json({ error: "Something went wrong, please try again later!" });
+    res.status(500).json({
+      error: "Something went wrong, please try again later!",
+    });
   } finally {
     client.release();
   }
